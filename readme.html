@@ -40,11 +40,17 @@
     button.copy-btn:hover {
       background-color: #0056b3;
     }
+    #error {
+      color: red;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
 
 <h2>📄 RSA ID Extractor</h2>
+
+<div id="error"></div>
 
 <div id="drop-area">
   <p>Drag & drop a PDF or image here<br>or <input type="file" id="fileInput" accept=".pdf,image/*" /></p>
@@ -54,12 +60,19 @@
 <div id="results"></div>
 
 <script>
+const urlParams = new URLSearchParams(window.location.search);
+const GEMINI_API_KEY = urlParams.get("key");
+
+if (!GEMINI_API_KEY) {
+  document.getElementById("error").textContent = "❌ Error: 'key' parameter is missing in the URL.";
+  document.getElementById("drop-area").style.display = "none";
+  return;
+}
+
 const dropArea = document.getElementById("drop-area");
 const fileInput = document.getElementById("fileInput");
 const resultsDiv = document.getElementById("results");
 const previewDiv = document.getElementById("preview");
-
-const GEMINI_API_KEY = 'AIzaSyAxZMB3FmAeU5XlC5xMDRJXF5QmckkWkxU'; // 🔑 Replace with your API key
 
 dropArea.addEventListener("dragover", e => {
   e.preventDefault();
@@ -144,19 +157,15 @@ async function uploadToGemini(file) {
 }
 
 async function sendPromptToGemini(fileUri, mimeType) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`, {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{
         role: "user",
         parts: [
-          {
-            fileData: { mimeType, fileUri }
-          },
-          {
-            text: "Please extract the South African ID number (13 digits), full name, and address (if visible) from this document. Return only text."
-          }
+          { fileData: { mimeType, fileUri } },
+          { text: "Please extract the South African ID number (13 digits), full name, and address (if visible) from this document. Return only text." }
         ]
       }],
       generationConfig: {
