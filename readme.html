@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RSA ID Extractor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f8f9fa;
+    }
+    #drop-area {
+      border: 2px dashed #007bff;
+      padding: 40px;
+      text-align: center;
+      color: #007bff;
+      cursor: pointer;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+    #drop-area.hover {
+      background-color: #e6f0ff;
+    }
+    #preview, #results {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      margin-top: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    button.copy-btn {
+      margin-left: 10px;
+      padding: 4px 8px;
+      border: none;
+      background-color: #007bff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button.copy-btn:hover {
+      background-color: #0056b3;
+    }
+  </style>
+</head>
+<body>
+
+<h2>📄 RSA ID Extractor</h2>
+
+<div id="drop-area">
+  <p>Drag & drop a PDF or image here<br>or <input type="file" id="fileInput" accept=".pdf,image/*" /></p>
+</div>
+
+<div id="preview"></div>
+<div id="results"></div>
+
+<script>
+const dropArea = document.getElementById("drop-area");
+const fileInput = document.getElementById("fileInput");
+const resultsDiv = document.getElementById("results");
+const previewDiv = document.getElementById("preview");
+
+const GEMINI_API_KEY = 'AIzaSyAxZMB3FmAeU5XlC5xMDRJXF5QmckkWkxU'; // 🔑 Replace with your API key
+
+dropArea.addEventListener("dragover", e => {
+  e.preventDefault();
+  dropArea.classList.add("hover");
+});
+dropArea.addEventListener("dragleave", () => dropArea.classList.remove("hover"));
+dropArea.addEventListener("drop", e => {
+  e.preventDefault();
+  dropArea.classList.remove("hover");
+  handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => {
+  handleFile(fileInput.files[0]);
+});
+
+async function handleFile(file) {
+  if (!file) return;
+  showLoading();
+  previewFile(file);
+
+  try {
+    const fileUri = await uploadToGemini(file);
+    const extractedText = await sendPromptToGemini(fileUri, file.type);
+
+    const idNumber = extractIdNumber(extractedText);
+    const name = extractName(extractedText);
+    const link = idNumber
+      ? `https://portal.harambee.co.za/Candidate/Search?CandidateFilterTypes=1&searchTerm=${idNumber}`
+      : null;
+
+    showResults(extractedText, idNumber, name, link);
+  } catch (err) {
+    console.error(err);
+    resultsDiv.innerText = "❌ Error: " + err.message;
+  }
+}
+
+function showLoading() {
+  resultsDiv.innerHTML = "🔍 Extracting data...";
+  previewDiv.innerHTML = "";
+}
+
+function previewFile(file) {
+  const url = URL.createObjectURL(file);
+  if (file.type.startsWith("image/")) {
+    previewDiv.innerHTML = `<img src="${url}" alt="Uploaded Image" style="max-width:100%;border:1px solid #ccc;border-radius:8px;">`;
+  } else if (file.type === "application/pdf") {
+    previewDiv.innerHTML = `<iframe src="${url}" width="100%" height="500px" style="border:1px solid #ccc;border-radius:8px;"></iframe>`;
+  } else {
+    previewDiv.innerText = "⚠️ Preview not available for this file type.";
+  }
+}
+
+async function uploadToGemini(file) {
+  const startUpload = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": file.size,
+      "X-Goog-Upload-Header-Content-Type": file.type,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ file: { display_name: file.name } })
+  });
+
+  const uploadUrl = startUpload.headers.get("X-Goog-Upload-URL");
+  if (!uploadUrl) throw new Error("Failed to get upload URL");
+
+  const uploadRes = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+      "Content-Type": file.type
+    },
+    body: file
+  });
+
+  const uploadJson = await uploadRes.json();
+  return uploadJson.file.uri;
+}
+
+async function sendPromptToGemini(fileUri, mimeType) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [
+          {
+            fileData: { mimeType, fileUri }
+          },
+          {
+            text: "Please extract the South African ID number (13 digits), full name, and address (if visible) from this document. Return only text."
+          }
+        ]
+      }],
+      generationConfig: {
+        responseMimeType: "text/plain"
+      }
+    })
+  });
+
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "No data extracted.";
+}
+
+function extractIdNumber(text) {
+  const match = text.match(/\b\d{13}\b/);
+  return match ? match[0] : null;
+}
+
+function extractName(text) {
+  const match = text.match(/(?:Name|Full Name)\s*[:\-]?\s*(.+)/i);
+  return match ? match[1].split('\n')[0].trim() : null;
+}
+
+function showResults(text, id, name, link) {
+  let html = `<p><strong>🧾 Extracted Text:</strong></p><pre>${text}</pre>`;
+
+  if (id) {
+    html += `<p><strong>🆔 ID Number:</strong> ${id} 
+               <button class="copy-btn" onclick="copyText('${id}')">Copy</button></p>`;
+  }
+
+  if (name) {
+    html += `<p><strong>👤 Name:</strong> ${name} 
+               <button class="copy-btn" onclick="copyText('${name}')">Copy</button></p>`;
+  }
+
+  if (link) {
+    html += `<p><strong>🔗 Portal Link:</strong> 
+               <a href="${link}" target="_blank">${link}</a> 
+               <button class="copy-btn" onclick="copyText('${link}')">Copy</button></p>`;
+  }
+
+  resultsDiv.innerHTML = html;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    alert("Copied: " + text);
+  });
+}
+</script>
+
+</body>
+</html>
